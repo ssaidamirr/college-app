@@ -309,17 +309,14 @@ with st.sidebar.expander("1. Enter Universities & Degree", expanded=True):
 # 2. Weights
 with st.sidebar.expander("2. Set Factor Weights", expanded=True):
     
-    # --- NEW: OPT Checkbox ---
     st.session_state.opt_is_important = st.checkbox(
         "OPT/Work Authorization is important to me",
         value=st.session_state.opt_is_important
     )
     st.caption("Uncheck this if you are a domestic student.")
-    # --- END NEW ---
     
     active_factors = []
     for factor in ALL_FACTORS:
-        # Conditionally add the 'opt' factor
         if factor['id'] == 'opt':
             if st.session_state.opt_is_important:
                 active_factors.append(factor)
@@ -327,16 +324,13 @@ with st.sidebar.expander("2. Set Factor Weights", expanded=True):
                     factor['name'], 0, 100, st.session_state.weights.get(factor['id'], 10), 5
                 )
             else:
-                # If not important, set its weight to 0
                 st.session_state.weights[factor['id']] = 0
         else:
-            # Add all other factors
             active_factors.append(factor)
             st.session_state.weights[factor['id']] = st.slider(
                 factor['name'], 0, 100, st.session_state.weights.get(factor['id'], 10), 5
             )
     
-    # Calculate total weight based on *active* factors only
     total_weight = sum(st.session_state.weights[f['id']] for f in active_factors)
     
     if total_weight == 100:
@@ -384,7 +378,7 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
             st.session_state.is_international,
             st.session_state.scholarships,
             st.session_state.degree_level,
-            st.session_state.opt_is_important # Pass the new flag
+            st.session_state.opt_is_important
         )
         
         if raw_ai_scores_list:
@@ -412,7 +406,6 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
                     normalized_ai_scores[score_key]['estimated_annual_cost'] = "0"
                     normalized_ai_scores[score_key]['estimated_starting_salary'] = "0"
                 
-                # Add a dummy 'opt' score if it wasn't requested, to prevent errors
                 if 'opt' not in normalized_ai_scores[score_key]:
                      normalized_ai_scores[score_key]['opt'] = {"score": 0, "note": "N/A"}
 
@@ -505,9 +498,30 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
         else:
             st.error("Failed to get AI scores. Please check the error messages.")
 
-# --- NEW: Add LinkedIn Link to Sidebar ---
+# --- Add LinkedIn Link & Photo to Sidebar ---
 st.sidebar.divider()
-st.sidebar.markdown("© 2025 | Built by [Saidamir S.](https://www.linkedin.com/in/ssaidamirr) 🔗")
+
+# Add custom CSS to make the image circular
+st.sidebar.markdown(
+    """
+    <style>
+    [data-testid="stSidebar"] [data-testid="stImage"] img {
+        border-radius: 50%;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+col1, col2 = st.sidebar.columns([1, 3]) # Give more space for the text
+with col1:
+    st.image(
+        "https://i.imgur.com/o2xH2Bv.jpg", # <-- I have put your correct Imgur link here!
+        width=60
+    )
+with col2:
+    st.markdown("© 2025 | Built by")
+    st.markdown("[Saidamir S. 🔗](https://www.linkedin.com/in/ssaidamirr)")
 # --- END NEW ---
 
 # --- Main Page (Results) ---
@@ -515,7 +529,7 @@ st.title("🎓 AI-Powered University Decision Matrix")
 st.write("Compare universities by weighting what matters to you. Let AI find the objective data.")
 
 if not st.session_state.calculations:
-    st.info("Fill in the details on the left and click 'Generate AI Rankings' to see your results.")
+    st.info("Fill in the details on the. left and click 'Generate AI Rankings' to see your results.")
     st.image("https://placehold.co/1200x600/FAFAFA/CCCCCC?text=Your+Results+Will+Appear+Here", use_container_width=True)
 else:
     calc = st.session_state.calculations
