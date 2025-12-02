@@ -1,24 +1,3 @@
-This is a fantastic evolution of the app! Adding these financial details will make the "Total Cost" score much more accurate and personal.
-
-I've implemented your requests by:
-
-Adding an "I am an international / out-of-state student" checkbox to the sidebar.
-
-Adding a new "Enter Scholarships ($)" section in the sidebar where you can input a dollar amount for each university.
-
-Modifying the AI prompt to use this new information. The AI will now be specifically instructed to:
-
-Use international/out-of-state tuition rates if the box is checked.
-
-Deduct your scholarship amount from the total cost before it creates the 1-10 "Total Cost" score.
-
-The rest of the app (the calculations, the chart) works exactly the same, but the "Total Cost" score it uses will be much smarter and more personalized to you.
-
-Here is the complete, updated app.py file. You can replace the old code on your GitHub with this new code.
-
-Updated app.py File (Plain Text)
-(Copy all the text in the box below and paste it into your app.py file on GitHub, replacing all the old code.)
-
 import streamlit as st
 import requests
 import pandas as pd
@@ -318,7 +297,7 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
             winner = max(scores_data, key=lambda x: x['score'])
             st.session_state.calculations = {
                 'scores': scores_data,
-                'table': table_data,
+                'table': table_.data,
                 'winner': winner
             }
             st.success("Analysis Complete!")
