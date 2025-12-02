@@ -516,7 +516,7 @@ st.sidebar.markdown(
 col1, col2 = st.sidebar.columns([1, 3]) # Give more space for the text
 with col1:
     st.image(
-        "https://imgur.com/ohW1Ili", # <-- I have put your correct Imgur link here!
+        "https://i.imgur.com/ohW1Ili.jpeg", # <-- I have put your correct Imgur link here!
         width=60
     )
 with col2:
