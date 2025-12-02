@@ -61,8 +61,6 @@ st.set_page_config(
 def fetch_ai_scores(universities_with_majors, is_international, scholarships, degree_level, opt_is_important):
     """
     Calls the Gemini API to get objective scores for universities.
-    
-    NEW: Only requests 'opt' data if it's important to the user.
     """
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
@@ -71,7 +69,6 @@ def fetch_ai_scores(universities_with_majors, is_international, scholarships, de
         return None
 
     # --- DYNAMIC PROMPT ---
-    # Create the list of factors to score
     active_ai_factors = []
     for factor in AI_SCORED_FACTORS:
         if factor['id'] == 'opt' and not opt_is_important:
@@ -327,7 +324,7 @@ with st.sidebar.expander("2. Set Factor Weights", expanded=True):
             if st.session_state.opt_is_important:
                 active_factors.append(factor)
                 st.session_state.weights[factor['id']] = st.slider(
-                    factor['name'], 0, 100, st.session_state.weights[factor['id']], 5
+                    factor['name'], 0, 100, st.session_state.weights.get(factor['id'], 10), 5
                 )
             else:
                 # If not important, set its weight to 0
@@ -336,7 +333,7 @@ with st.sidebar.expander("2. Set Factor Weights", expanded=True):
             # Add all other factors
             active_factors.append(factor)
             st.session_state.weights[factor['id']] = st.slider(
-                factor['name'], 0, 100, st.session_state.weights[factor['id']], 5
+                factor['name'], 0, 100, st.session_state.weights.get(factor['id'], 10), 5
             )
     
     # Calculate total weight based on *active* factors only
@@ -426,7 +423,6 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
             table_data = []
             chart_data = [] 
             
-            # --- NEW: Build active_weights dict for calculation ---
             active_weights = {}
             for factor in ALL_FACTORS:
                 if factor['id'] == 'opt' and not st.session_state.opt_is_important:
@@ -434,7 +430,6 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
                 active_weights[factor['id']] = st.session_state.weights[factor['id']]
             
             total_w = sum(active_weights.values()) or 1
-            # --- END NEW ---
             
             for i, uni in enumerate(valid_universities):
                 uni_name = uni['name']
@@ -458,7 +453,6 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
                         score = st.session_state.user_scores.get(score_key, {}).get(fid, 0)
                         row[factor['name']] = f"{score}/10"
                     
-                    # --- CALCULATION FIX: Only use active weights ---
                     if fid in active_weights:
                         weight_normalized = active_weights[fid] / total_w
                         contribution = score * weight_normalized
@@ -467,9 +461,8 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
                         chart_data.append({
                             'University': table_row_name,
                             'Factor': factor['name'],
-                            'Contribution': contribution * 10 # Scale to 100
+                            'Contribution': contribution * 10
                         })
-                    # --- END CALCULATION FIX ---
                 
                 # --- ANNUAL COST & ROI Calculation ---
                 cost_str = st.session_state.ai_scores.get(score_key, {}).get('estimated_annual_cost', '0')
@@ -491,7 +484,7 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
                 row['Estimated ROI'] = f"{roi_percent:.1f}% (Salary / Net Cost)"
                 # --- END ROI Calculation ---
                 
-                final_score = round(weighted_score_sum * 10, 1) # Scale to 1-100
+                final_score = round(weighted_score_sum * 10, 1)
                 scores_data.append({'name': table_row_name, 'score': final_score})
                 row['Final Score'] = final_score
                 table_data.append(row)
@@ -512,13 +505,18 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
         else:
             st.error("Failed to get AI scores. Please check the error messages.")
 
+# --- NEW: Add LinkedIn Link to Sidebar ---
+st.sidebar.divider()
+st.sidebar.markdown("© 2025 | Built by [Saidamir S.](https://www.linkedin.com/in/ssaidamirr) 🔗")
+# --- END NEW ---
+
 # --- Main Page (Results) ---
 st.title("🎓 AI-Powered University Decision Matrix")
 st.write("Compare universities by weighting what matters to you. Let AI find the objective data.")
 
 if not st.session_state.calculations:
     st.info("Fill in the details on the left and click 'Generate AI Rankings' to see your results.")
-    st.image("https.placehold.co/1200x600/FAFAFA/CCCCCC?text=Your+Results+Will+Appear+Here", use_container_width=True)
+    st.image("https://placehold.co/1200x600/FAFAFA/CCCCCC?text=Your+Results+Will+Appear+Here", use_container_width=True)
 else:
     calc = st.session_state.calculations
     
@@ -553,7 +551,6 @@ else:
     df = df.set_index("University")
     
     # --- DYNAMIC TABLE COLUMNS ---
-    # Build the list of columns based on user's choice
     factor_cols = []
     for f in ALL_FACTORS:
         if f['id'] == 'opt' and not st.session_state.opt_is_important:
