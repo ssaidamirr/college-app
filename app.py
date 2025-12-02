@@ -40,6 +40,8 @@ st.set_page_config(
 def fetch_ai_scores(universities, is_international, scholarships):
     """
     Calls the Gemini API to get objective scores for universities.
+    
+    NEW: Now requests an object with 'score' and 'note' for each factor.
     """
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
@@ -62,19 +64,20 @@ def fetch_ai_scores(universities, is_international, scholarships):
     uni_list_str = ', '.join([f'"{u}"' for u in universities])
     factors_list_str = '\n- '.join([f['id'] for f in AI_SCORED_FACTORS]) # Use IDs for keys
     
+    # --- PROMPT UPGRADE ---
     user_prompt = (
         f"For the following list of universities: [{uni_list_str}], "
-        "provide scores (1-10) for these factors. "
+        "provide scores for these factors. "
         "Return your response ONLY as a JSON array, with one object per university. "
-        "Each object MUST have a 'university_name' key and keys for each factor ID. "
+        "Each object MUST have a 'university_name' key. "
+        "For each factor ID, the value MUST be an object with two keys: 'score' (the 1-10 rating) and 'note' (a brief string with the raw data used, e.g., '$45,000 net cost' or '3-year STEM OPT'). "
         f"The factor ID keys are: {factors_list_str}"
     )
+    # --- END PROMPT UPGRADE ---
     
     if is_international:
         user_prompt += "\n\nIMPORTANT: For all 'cost' calculations, you MUST use the international or out-of-state tuition and fees."
     
-    # Create a list of scholarships to add to the prompt
-    # Use the index 'i' in the scholarship dict to handle duplicate names
     scholarship_list = [f"- {uni}: ${amount}" for uni, amount in scholarships.items() if amount > 0]
     if scholarship_list:
         scholarship_str = "\n".join(scholarship_list)
@@ -139,7 +142,9 @@ def fetch_chat_response(chat_history, results_context):
     system_prompt = (
         "You are a helpful college admissions analyst. "
         "Your job is to answer follow-up questions about a set of college decision results that I will provide. "
-        "Be concise, friendly, and helpful. Use the data I provide to justify your answers."
+        "Be concise, friendly, and helpful. Use the data I provide to justify your answers. "
+        "The user's results table contains scores (e.g., '5/10') and notes (e.g., '$35k net cost') in the same cell. "
+        "When asked 'how much was X', use the 'note' to find the dollar amount."
     )
     
     api_history = []
@@ -202,17 +207,14 @@ if 'scholarships' not in st.session_state:
     st.session_state.scholarships = {}
 if 'messages' not in st.session_state:
     st.session_state.messages = []
+if 'university_inputs' not in st.session_state:
+    st.session_state.university_inputs = ["", ""]
 
 # --- Sidebar (Controls) ---
 st.sidebar.title("🎓 College Matrix Controls")
 
 # 1. Universities
 with st.sidebar.expander("1. Enter Universities", expanded=True):
-    # Use a new list in session state to hold the university inputs
-    if 'university_inputs' not in st.session_state:
-        st.session_state.university_inputs = ["", ""]
-        
-    # We iterate over the *indices* of the list
     for i in range(len(st.session_state.university_inputs)):
         col1, col2 = st.columns([4, 1])
         st.session_state.university_inputs[i] = col1.text_input(
@@ -220,7 +222,7 @@ with st.sidebar.expander("1. Enter Universities", expanded=True):
             st.session_state.university_inputs[i], 
             label_visibility="collapsed",
             placeholder=f"University {i + 1}",
-            key=f"uni_input_{i}" # Use index for unique key
+            key=f"uni_input_{i}"
         )
         if col2.button("X", key=f"remove_uni_{i}", help="Remove university") and len(st.session_state.university_inputs) > 2:
             st.session_state.university_inputs.pop(i)
@@ -230,7 +232,6 @@ with st.sidebar.expander("1. Enter Universities", expanded=True):
         st.session_state.university_inputs.append("")
         st.rerun()
     
-    # valid_universities is now built from university_inputs
     valid_universities = [u.strip() for u in st.session_state.university_inputs if u.strip()]
     
     st.session_state.is_international = st.checkbox(
@@ -256,16 +257,13 @@ with st.sidebar.expander("3. Enter Scholarships ($)", expanded=True):
     if not valid_universities:
         st.info("Add universities above to enter scholarships.")
     else:
-        # --- KEY FIX ---
-        # We iterate over the *index* and *name* of the valid list
-        # This creates unique keys even if names are duplicated
-        st.session_state.scholarships = {} # Clear scholarships to rebuild
+        st.session_state.scholarships = {}
         for i, uni_name in enumerate(valid_universities):
             st.session_state.scholarships[f"{uni_name}_{i}"] = st.number_input(
                 f"Scholarship for {uni_name} ($)",
                 min_value=0,
                 step=1000,
-                key=f"scholarship_{i}" # Use index for unique key
+                key=f"scholarship_{i}"
             )
 
 # 4. Manual Scores
@@ -273,16 +271,14 @@ with st.sidebar.expander("4. Enter Your Personal Scores (1-10)", expanded=True):
     if not valid_universities:
         st.info("Add universities above to enter your scores.")
     else:
-        # --- KEY FIX ---
-        # We iterate over the *index* and *name*
-        st.session_state.user_scores = {} # Clear scores to rebuild
+        st.session_state.user_scores = {}
         for i, uni_name in enumerate(valid_universities):
             st.markdown(f"**{uni_name}** (Entry {i+1})")
             st.session_state.user_scores[f"{uni_name}_{i}"] = {}
             for factor in USER_SCORED_FACTORS:
                 st.session_state.user_scores[f"{uni_name}_{i}"][factor['id']] = st.number_input(
                     factor['name'], 1, 10, 5, 
-                    key=f"score_{i}_{factor['id']}" # Use index for unique key
+                    key=f"score_{i}_{factor['id']}"
                 )
 
 # 5. Generate Button
@@ -291,11 +287,10 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
         st.session_state.ai_scores = None
         st.session_state.calculations = None
         
-        # Pass the valid university names, but the indexed scholarship dict
         raw_ai_scores_list = fetch_ai_scores(
-            valid_universities, # Send the list of names
+            valid_universities,
             st.session_state.is_international,
-            st.session_state.scholarships # Send the dict with {uni_name_i: amount}
+            st.session_state.scholarships
         )
         
         if raw_ai_scores_list:
@@ -305,21 +300,23 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
                 if name:
                     raw_ai_scores_dict[name] = item
             
-            # This dict will hold the final, matched scores
             normalized_ai_scores = {}
-            # We must iterate by index to match scores to the right input box
             for i, uni_name in enumerate(valid_universities):
                 lower_uni_name = uni_name.lower()
                 found_key = next((key for key in raw_ai_scores_dict if lower_uni_name in key.lower()), None)
                 
-                # The key for this score is uni_name + index
                 score_key = f"{uni_name}_{i}" 
                 
                 if found_key:
                     normalized_ai_scores[score_key] = raw_ai_scores_dict[found_key]
                 else:
                     st.warning(f"AI did not return data for '{uni_name}'. Scores will be 0.")
-                    normalized_ai_scores[score_key] = {f['id']: 0 for f in AI_SCORED_FACTORS}
+                    # --- DATA STRUCTURE FIX ---
+                    # Create an empty structure that matches the new format
+                    normalized_ai_scores[score_key] = {
+                        f['id']: {"score": 0, "note": "Data not found"} for f in AI_SCORED_FACTORS
+                    }
+                    # --- END DATA STRUCTURE FIX ---
             
             st.session_state.ai_scores = normalized_ai_scores
 
@@ -328,7 +325,6 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
             table_data = []
             total_w = sum(st.session_state.weights.values()) or 1
             
-            # Iterate by index to match all our data
             for i, uni_name in enumerate(valid_universities):
                 score_key = f"{uni_name}_{i}"
                 weighted_score = 0
@@ -336,17 +332,24 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
                 
                 for factor in ALL_FACTORS:
                     fid = factor['id']
-                    score = 0
+                    
                     if fid in [f['id'] for f in AI_SCORED_FACTORS]:
-                        # Get score from the AI dict using the indexed key
-                        score = st.session_state.ai_scores.get(score_key, {}).get(fid, 0)
+                        # --- CALCULATION LOGIC UPGRADE ---
+                        # Get the nested score object
+                        ai_score_obj = st.session_state.ai_scores.get(score_key, {}).get(fid, {"score": 0, "note": "N/A"})
+                        score = ai_score_obj.get('score', 0)
+                        note = ai_score_obj.get('note', 'N/A')
+                        
+                        # Add to the table row with the note
+                        row[factor['name']] = f"{score}/10 ({note})"
+                        # --- END CALCULATION LOGIC UPGRADE ---
                     else:
-                        # Get score from the user dict using the indexed key
                         score = st.session_state.user_scores.get(score_key, {}).get(fid, 0)
+                        # Add to the table row (no note for user scores)
+                        row[factor['name']] = f"{score}/10"
                     
                     weight = st.session_state.weights[fid] / total_w
-                    weighted_score += score * weight
-                    row[factor['name']] = score
+                    weighted_score += score * weight # Weight is based on the 1-10 score
                 
                 final_score = round(weighted_score * 10, 1) # Scale to 1-100
                 scores_data.append({'name': f"{uni_name} (Entry {i+1})", 'score': final_score})
@@ -361,7 +364,7 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
                 'winner': winner
             }
             
-            st.session_state.messages = [] # Clear old chat on new results
+            st.session_state.messages = []
             st.success("Analysis Complete!")
         else:
             st.error("Failed to get AI scores. Please check the error messages.")
@@ -372,7 +375,6 @@ st.write("Compare universities by weighting what matters to you. Let AI find the
 
 if not st.session_state.calculations:
     st.info("Fill in the details on the left and click 'Generate AI Rankings' to see your results.")
-    # --- IMAGE FIX: Added https:// ---
     st.image("https://placehold.co/1200x600/FAFAFA/CCCCCC?text=Your+Results+Will+Appear+Here", use_container_width=True)
 else:
     calc = st.session_state.calculations
@@ -415,11 +417,10 @@ else:
         is_ai_col = any(col_name == f['name'] for f in AI_SCORED_FACTORS)
         return 'background-color: #EFF6FF' if is_ai_col else None
         
-    # --- WARNING FIX: Replaced applymap_index with map_index ---
     st.dataframe(
         df.style.map_index(style_ai_columns, axis=1)
                 .apply(lambda x: ['background-color: #DBEAFE' if x.name == 'Final Score' else '' for i in x], axis=0)
-                .format("{:.1f}", subset=[col for col in df.columns if col != "University"])
+                # Removed the .format() as columns are now strings
     )
     st.caption("Blue-tinted columns are scored by AI. White columns are your manual scores.")
     
@@ -434,22 +435,16 @@ else:
             
     # Get new chat input from user
     if prompt := st.chat_input("e.g., Why did Harvard score so low on cost?"):
-        # Add user's message to history
         st.session_state.messages.append({"role": "user", "content": prompt})
         
-        # Display user's message
         with st.chat_message("user"):
             st.markdown(prompt)
             
-        # Get AI's response
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                # Pass the chat history and the results table (as JSON) to the AI
                 results_context = json.dumps(calc['table'])
                 response = fetch_chat_response(st.session_state.messages, results_context)
                 
-                # Display AI's response
                 st.markdown(response)
                 
-                # Add AI's response to history
                 st.session_state.messages.append({"role": "assistant", "content": response})
