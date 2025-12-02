@@ -28,7 +28,9 @@ ALL_FACTORS = AI_SCORED_FACTORS + USER_SCORED_FACTORS
 
 # Gemini API Model
 GEMINI_MODEL = 'gemini-2.5-flash-preview-09-2025'
-API_URL = f"https.generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key="
+# --- URL FIX: Added https:// ---
+API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key="
+# --- END URL FIX ---
 
 # --- NEW: Helper Function to Parse Dollar Strings ---
 def parse_dollars(s):
@@ -251,10 +253,13 @@ if 'scholarships' not in st.session_state:
     st.session_state.scholarships = {}
 if 'messages' not in st.session_state:
     st.session_state.messages = []
+# --- NEW: Degree Level and University/Major inputs ---
 if 'degree_level' not in st.session_state:
     st.session_state.degree_level = "Bachelor's"
 if 'university_inputs' not in st.session_state:
+    # Store a list of dicts
     st.session_state.university_inputs = [{'name': '', 'major': ''}, {'name': '', 'major': ''}]
+# --- END NEW ---
 
 # --- Sidebar (Controls) ---
 st.sidebar.title("🎓 College Matrix Controls")
@@ -262,15 +267,18 @@ st.sidebar.title("🎓 College Matrix Controls")
 # 1. Universities
 with st.sidebar.expander("1. Enter Universities & Degree", expanded=True):
     
+    # --- NEW: Degree Level Radio ---
     st.session_state.degree_level = st.radio(
         "Select Degree Level",
         ("Bachelor's", "Master's"),
         index=0 if st.session_state.degree_level == "Bachelor's" else 1,
         horizontal=True
     )
+    # --- END NEW ---
     
     st.divider()
     
+    # --- UI UPGRADE: University and Major ---
     for i in range(len(st.session_state.university_inputs)):
         st.markdown(f"**University {i + 1}**")
         col1, col2 = st.columns([3, 2])
@@ -299,10 +307,12 @@ with st.sidebar.expander("1. Enter Universities & Degree", expanded=True):
         st.session_state.university_inputs.append({'name': '', 'major': ''})
         st.rerun()
     
+    # --- LOGIC UPGRADE: Validate both name and major are filled ---
     valid_universities = [
         u for u in st.session_state.university_inputs 
         if u['name'].strip() and u['major'].strip()
     ]
+    # --- END LOGIC UPGRADE ---
     
     st.session_state.is_international = st.checkbox(
         "I am an international / out-of-state student",
@@ -412,13 +422,18 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
                     fid = factor['id']
                     
                     if fid in [f['id'] for f in AI_SCORED_FACTORS]:
+                        # --- CALCULATION LOGIC UPGRADE ---
+                        # Get the nested score object
                         ai_score_obj = st.session_state.ai_scores.get(score_key, {}).get(fid, {"score": 0, "note": "N/A"})
                         score = ai_score_obj.get('score', 0)
                         note = ai_score_obj.get('note', 'N/A')
                         
+                        # Add to the table row with the note
                         row[factor['name']] = f"{score}/10 ({note})"
+                        # --- END CALCULATION LOGIC UPGRADE ---
                     else:
                         score = st.session_state.user_scores.get(score_key, {}).get(fid, 0)
+                        # Add to the table row (no note for user scores)
                         row[factor['name']] = f"{score}/10"
                     
                     weight_normalized = st.session_state.weights[fid] / total_w
