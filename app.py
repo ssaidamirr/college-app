@@ -295,11 +295,15 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
                 table_data.append(row)
             
             winner = max(scores_data, key=lambda x: x['score'])
+            
+            # --- THIS IS THE FIX ---
             st.session_state.calculations = {
                 'scores': scores_data,
-                'table': table_.data,
+                'table': table_data, # <-- Changed table_.data to table_data
                 'winner': winner
             }
+            # --- END OF FIX ---
+            
             st.success("Analysis Complete!")
         else:
             st.error("Failed to get AI scores. Please check the error messages.")
@@ -345,9 +349,11 @@ else:
     # 3. Detailed Table
     st.subheader("Detailed Score Breakdown")
     
+    # Convert table data to DataFrame for better display
     df = pd.DataFrame(calc['table'])
     df = df.set_index("University")
     
+    # Highlight AI-scored columns
     def style_ai_columns(col_name):
         is_ai_col = any(col_name == f['name'] for f in AI_SCORED_FACTORS)
         return 'background-color: #EFF6FF' if is_ai_col else None
