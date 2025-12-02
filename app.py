@@ -2,15 +2,14 @@ import streamlit as st
 import requests
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px  # NEW import for the stacked bar chart
+import plotly.express as px
 import json
-import re  # NEW import for parsing dollar amounts
+import re
 
 # --- Constants ---
 
-# Factors the AI will score (1-10, 1=worst, 10=best)
 AI_SCORED_FACTORS = [
-    {'id': 'cost', 'name': 'Total Cost of Attendance (Lower is Better)'},
+    {'id': 'cost', 'name': 'Annual Net Cost (Lower is Better)'},
     {'id': 'opt', 'name': 'Work Authorization (based on Major)'},
     {'id': 'careers', 'name': 'Career Opportunities (based on Major)'},
     {'id': 'prestige', 'name': 'Academic Prestige (for Major)'},
@@ -18,7 +17,6 @@ AI_SCORED_FACTORS = [
     {'id': 'living', 'name': 'Living Environment/Life'},
 ]
 
-# Factors the user must score manually (1-10)
 USER_SCORED_FACTORS = [
     {'id': 'fit', 'name': 'Program Fit (my goals)'},
     {'id': 'feel', 'name': 'Personal Feelings Towards the Uni'},
@@ -26,17 +24,11 @@ USER_SCORED_FACTORS = [
 
 ALL_FACTORS = AI_SCORED_FACTORS + USER_SCORED_FACTORS
 
-# Gemini API Model
 GEMINI_MODEL = 'gemini-2.5-flash-preview-09-2025'
-# --- URL FIX: Added https:// ---
 API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key="
-# --- END URL FIX ---
 
-# --- NEW: Helper Function to Parse Dollar Strings ---
+# --- Helper Function to Parse Dollar Strings ---
 def parse_dollars(s):
-    """
-    Parses a string like '$150k', '$240,000', or '90000/yr' into a number.
-    """
     if isinstance(s, (int, float)):
         return s
     
@@ -70,7 +62,7 @@ def fetch_ai_scores(universities_with_majors, is_international, scholarships, de
     """
     Calls the Gemini API to get objective scores for universities.
     
-    NEW: Now requests score/note objects AND raw cost/salary data.
+    NEW: All cost logic is now ANNUAL.
     """
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
@@ -78,7 +70,7 @@ def fetch_ai_scores(universities_with_majors, is_international, scholarships, de
         st.error("API key not found. Please add it to your Streamlit Secrets.")
         return None
 
-    # --- PROMPT UPGRADE ---
+    # --- PROMPT UPGRADE (ANNUAL COST) ---
     system_prompt = (
         "You are an expert college admissions and career analyst. "
         "Your job is to provide objective scores (from 1 to 10, 1=worst, 10=best) "
@@ -86,14 +78,15 @@ def fetch_ai_scores(universities_with_majors, is_international, scholarships, de
         "You MUST respond ONLY with a valid JSON array of objects. "
         "Do NOT include any other text, markdown formatting, or explanations. "
         "\n\nSCORING RULES:"
-        "1. 'cost' (Total Cost of Attendance): Find the 4-YEAR total cost (tuition, fees, room, board). A lower cost MUST get a higher score. "
-        "   You MUST first deduct any provided scholarship amount before scoring. "
+        "1. 'cost' (Annual Net Cost): Find the **annual (per-year)** total cost of attendance (tuition, fees, room, board). "
+        "   The scholarship amount provided by the user is also *per year*. You MUST subtract this from the *annual* total cost to get the *annual net cost*. "
+        "   Score the 'cost' factor based on this final *annual net cost*. A lower net cost MUST get a higher score."
         "   If the user is international/out-of-state, you MUST use that specific tuition rate."
         "2. 'opt' (Work Authorization): Based on the *specific major* and *degree level*, determine its U.S. work authorization. "
         "   3-year STEM OPT eligible gets a 10. 1-year standard OPT gets a 5. No OPT gets a 1."
         "3. 'careers' & 'prestige': Scores should be specific to the *major* at that university."
-        "4. 'note': For each factor, you MUST provide a 'note' with the raw data used (e.g., '$60k/yr total cost', '3-year STEM OPT eligible')."
-        "5. RAW DATA: You MUST also return 'estimated_total_cost' (the 4-year total cost as a string, e.g., '$240,000') and 'estimated_starting_salary' (avg. starting salary for that major as a string, e.g., '$90,000/yr')."
+        "4. 'note': For each factor, you MUST provide a 'note' with the raw data used (e.g., '$60k/yr net cost', '3-year STEM OPT eligible')."
+        "5. RAW DATA: You MUST also return 'estimated_annual_cost' (the *annual* total cost as a string, e.g., '$60,000/yr') and 'estimated_starting_salary' (avg. starting salary for that major as a string, e.g., '$90,000/yr')."
     )
     # --- END PROMPT UPGRADE ---
     
@@ -107,7 +100,7 @@ def fetch_ai_scores(universities_with_majors, is_international, scholarships, de
         "Return your response ONLY as a JSON array, with one object per university. "
         "Each object MUST have: "
         " 1. 'university_name' (string) "
-        " 2. 'estimated_total_cost' (string, 4-year total cost) "
+        " 2. 'estimated_annual_cost' (string, 1-year total cost) "
         " 3. 'estimated_starting_salary' (string, avg starting salary for major) "
         " 4. An object for each factor ID, containing 'score' (1-10) and 'note' (string). "
         f"The factor ID keys are: {factors_list_str}"
@@ -121,11 +114,11 @@ def fetch_ai_scores(universities_with_majors, is_international, scholarships, de
         scholarship_key = f"{uni['name']}_{i}"
         amount = scholarships.get(scholarship_key, 0)
         if amount > 0:
-            scholarship_prompt_list.append(f"- {uni['name']} ({uni['major']}): ${amount}")
+            scholarship_prompt_list.append(f"- {uni['name']} ({uni['major']}): ${amount} per year")
             
     if scholarship_prompt_list:
         scholarship_str = "\n".join(scholarship_prompt_list)
-        user_prompt += f"\n\nIMPORTANT: You MUST deduct these scholarship amounts from the total cost before calculating the 'cost' score:\n{scholarship_str}"
+        user_prompt += f"\n\nIMPORTANT: You MUST deduct these annual scholarship amounts from the annual total cost before calculating the 'cost' score:\n{scholarship_str}"
 
     payload = {
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -183,14 +176,14 @@ def fetch_chat_response(chat_history, results_context):
         st.error("API key not found. Please add it to your Streamlit Secrets.")
         return "Sorry, I can't connect to my brain right now. Please check the API key."
 
-    # --- PROMPT UPGRADE ---
+    # --- PROMPT UPGRADE (ANNUAL COST) ---
     system_prompt = (
         "You are a helpful college admissions and career analyst. "
         "Your job is to answer follow-up questions about a set of college decision results that I will provide. "
         "Be concise, friendly, and helpful. Use the data I provide to justify your answers. "
         "The user's results table contains scores (e.g., '5/10 (note)'), a Final Score, "
-        "and new columns: 'Est. Salary', 'Est. 4-Yr Cost', and 'Estimated ROI'. "
-        "When asked 'how much was X', use the 'Est. 4-Yr Cost' column or the 'note' in the 'Total Cost' cell. "
+        "and new columns: 'Est. Salary', 'Est. Annual Cost', and 'Estimated ROI'. "
+        "When asked 'how much was X', use the 'Est. Annual Cost' column or the 'note' in the 'Annual Net Cost' cell. "
         "When asked about salary or ROI, use the new columns."
     )
     # --- END PROMPT UPGRADE ---
@@ -253,13 +246,10 @@ if 'scholarships' not in st.session_state:
     st.session_state.scholarships = {}
 if 'messages' not in st.session_state:
     st.session_state.messages = []
-# --- NEW: Degree Level and University/Major inputs ---
 if 'degree_level' not in st.session_state:
     st.session_state.degree_level = "Bachelor's"
 if 'university_inputs' not in st.session_state:
-    # Store a list of dicts
     st.session_state.university_inputs = [{'name': '', 'major': ''}, {'name': '', 'major': ''}]
-# --- END NEW ---
 
 # --- Sidebar (Controls) ---
 st.sidebar.title("🎓 College Matrix Controls")
@@ -267,18 +257,15 @@ st.sidebar.title("🎓 College Matrix Controls")
 # 1. Universities
 with st.sidebar.expander("1. Enter Universities & Degree", expanded=True):
     
-    # --- NEW: Degree Level Radio ---
     st.session_state.degree_level = st.radio(
         "Select Degree Level",
         ("Bachelor's", "Master's"),
         index=0 if st.session_state.degree_level == "Bachelor's" else 1,
         horizontal=True
     )
-    # --- END NEW ---
     
     st.divider()
     
-    # --- UI UPGRADE: University and Major ---
     for i in range(len(st.session_state.university_inputs)):
         st.markdown(f"**University {i + 1}**")
         col1, col2 = st.columns([3, 2])
@@ -307,12 +294,10 @@ with st.sidebar.expander("1. Enter Universities & Degree", expanded=True):
         st.session_state.university_inputs.append({'name': '', 'major': ''})
         st.rerun()
     
-    # --- LOGIC UPGRADE: Validate both name and major are filled ---
     valid_universities = [
         u for u in st.session_state.university_inputs 
         if u['name'].strip() and u['major'].strip()
     ]
-    # --- END LOGIC UPGRADE ---
     
     st.session_state.is_international = st.checkbox(
         "I am an international / out-of-state student",
@@ -333,14 +318,14 @@ with st.sidebar.expander("2. Set Factor Weights", expanded=True):
         st.warning(f"Total Weight: {total_weight}% (Will be normalized)")
 
 # 3. Scholarships
-with st.sidebar.expander("3. Enter Scholarships ($)", expanded=True):
+with st.sidebar.expander("3. Enter Scholarships (Annual) ($)", expanded=True):
     if not valid_universities:
         st.info("Add universities & majors above to enter scholarships.")
     else:
         st.session_state.scholarships = {}
         for i, uni in enumerate(valid_universities):
             st.session_state.scholarships[f"{uni['name']}_{i}"] = st.number_input(
-                f"Scholarship for {uni['name']} ($)",
+                f"Scholarship (per year) for {uni['name']} ($)",
                 min_value=0,
                 step=1000,
                 key=f"scholarship_{i}"
@@ -396,8 +381,7 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
                     normalized_ai_scores[score_key] = {
                         f['id']: {"score": 0, "note": "Data not found"} for f in AI_SCORED_FACTORS
                     }
-                    # Add empty keys for raw data
-                    normalized_ai_scores[score_key]['estimated_total_cost'] = "0"
+                    normalized_ai_scores[score_key]['estimated_annual_cost'] = "0"
                     normalized_ai_scores[score_key]['estimated_starting_salary'] = "0"
 
             st.session_state.ai_scores = normalized_ai_scores
@@ -405,7 +389,7 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
             # --- Perform Calculations ---
             scores_data = []
             table_data = []
-            chart_data = [] # NEW: For the stacked bar chart
+            chart_data = [] 
             
             total_w = sum(st.session_state.weights.values()) or 1
             
@@ -422,45 +406,48 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
                     fid = factor['id']
                     
                     if fid in [f['id'] for f in AI_SCORED_FACTORS]:
-                        # --- CALCULATION LOGIC UPGRADE ---
-                        # Get the nested score object
                         ai_score_obj = st.session_state.ai_scores.get(score_key, {}).get(fid, {"score": 0, "note": "N/A"})
                         score = ai_score_obj.get('score', 0)
                         note = ai_score_obj.get('note', 'N/A')
                         
-                        # Add to the table row with the note
                         row[factor['name']] = f"{score}/10 ({note})"
-                        # --- END CALCULATION LOGIC UPGRADE ---
                     else:
                         score = st.session_state.user_scores.get(score_key, {}).get(fid, 0)
-                        # Add to the table row (no note for user scores)
                         row[factor['name']] = f"{score}/10"
                     
                     weight_normalized = st.session_state.weights[fid] / total_w
                     contribution = score * weight_normalized
                     weighted_score_sum += contribution
                     
-                    # Add data for the new chart
                     chart_data.append({
                         'University': table_row_name,
                         'Factor': factor['name'],
                         'Contribution': contribution * 10 # Scale to 100
                     })
                 
-                # --- NEW: ROI Calculation ---
-                cost_str = st.session_state.ai_scores.get(score_key, {}).get('estimated_total_cost', '0')
+                # --- ANNUAL COST & ROI Calculation ---
+                cost_str = st.session_state.ai_scores.get(score_key, {}).get('estimated_annual_cost', '0')
                 salary_str = st.session_state.ai_scores.get(score_key, {}).get('estimated_starting_salary', '0')
                 
                 cost_num = parse_dollars(cost_str)
                 salary_num = parse_dollars(salary_str)
                 
-                # Add 4-year cost and salary to table
-                row['Est. 4-Yr Cost'] = f"${cost_num:,.0f}"
+                row['Est. Annual Cost'] = f"${cost_num:,.0f}/yr"
                 row['Est. Salary'] = f"${salary_num:,.0f}/yr"
                 
-                # Calculate ROI
-                roi_percent = (salary_num / (cost_num / 4)) * 100 if cost_num > 0 else 0 # Compare 1yr salary to 1yr cost
-                row['Estimated ROI'] = f"{roi_percent:.1f}%"
+                # Calculate ROI (Annual Salary / Annual Net Cost)
+                # The 'cost_num' is already the *net* cost because the AI was told to use the 'note' from the 'cost' factor,
+                # which was already net scholarship. Let's make that more robust.
+                # We will use the 'note' from the cost factor to get the *net* cost.
+                cost_note = st.session_state.ai_scores.get(score_key, {}).get('cost', {}).get('note', '0')
+                net_cost_num = parse_dollars(cost_note)
+                
+                if net_cost_num == 0:
+                    # Fallback if note parsing fails
+                    net_cost_num = cost_num - st.session_state.scholarships.get(score_key, 0)
+                
+                roi_percent = (salary_num / net_cost_num) * 100 if net_cost_num > 0 else 0
+                row['Estimated ROI'] = f"{roi_percent:.1f}% (Salary / Net Cost)"
                 # --- END ROI Calculation ---
                 
                 final_score = round(weighted_score_sum * 10, 1) # Scale to 1-100
@@ -470,14 +457,13 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
             
             winner = max(scores_data, key=lambda x: x['score'])
             
-            # --- NEW: Create DataFrame for chart ---
             df_chart = pd.DataFrame(chart_data)
             
             st.session_state.calculations = {
                 'scores': scores_data,
                 'table': table_data, 
                 'winner': winner,
-                'df_chart': df_chart # Save the chart data
+                'df_chart': df_chart
             }
             
             st.session_state.messages = []
@@ -528,7 +514,7 @@ else:
     
     # Re-order columns to be more logical
     factor_cols = [f['name'] for f in ALL_FACTORS]
-    data_cols = ['Est. 4-Yr Cost', 'Est. Salary', 'Estimated ROI', 'Final Score']
+    data_cols = ['Est. Annual Cost', 'Est. Salary', 'Estimated ROI', 'Final Score']
     all_cols = factor_cols + [c for c in data_cols if c in df.columns]
     df = df[all_cols]
     
@@ -539,7 +525,7 @@ else:
     st.dataframe(
         df.style.map_index(style_ai_columns, axis=1)
                 .apply(lambda x: ['background-color: #DBEAFE' if x.name in data_cols else '' for i in x], axis=0)
-                .format("{:.1f}", subset=['Final Score']) # Only format the final score
+                .format("{:.1f}", subset=['Final Score'])
     )
     st.caption("Blue-tinted columns are scored by AI. White columns are your manual scores. Grey columns are calculated data.")
     
