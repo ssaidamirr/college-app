@@ -35,23 +35,18 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- Helper Function: API Call ---
+# --- Helper Function: API Call (for Rankings) ---
 
 def fetch_ai_scores(universities, is_international, scholarships):
     """
     Calls the Gemini API to get objective scores for universities.
-    This function runs securely on the server.
-    
-    NEW: It now accepts is_international and scholarships to refine the cost score.
     """
     try:
-        # Get the API key from Streamlit Secrets
         api_key = st.secrets["GEMINI_API_KEY"]
     except KeyError:
         st.error("API key not found. Please add it to your Streamlit Secrets.")
         return None
 
-    # --- Prompt Fix: Be very strict ---
     system_prompt = (
         "You are an expert college admissions and data analyst. "
         "Your job is to provide objective scores (from 1 to 10, where 1 is worst and 10 is best) "
@@ -75,22 +70,18 @@ def fetch_ai_scores(universities, is_international, scholarships):
         f"The factor ID keys are: {factors_list_str}"
     )
     
-    # --- NEW: Add context for student status and scholarships ---
     if is_international:
         user_prompt += "\n\nIMPORTANT: For all 'cost' calculations, you MUST use the international or out-of-state tuition and fees."
     
-    # Create a list of scholarships to add to the prompt
     scholarship_list = [f"- {uni}: ${amount}" for uni, amount in scholarships.items() if amount > 0]
     if scholarship_list:
         scholarship_str = "\n".join(scholarship_list)
         user_prompt += f"\n\nIMPORTANT: You MUST deduct these scholarship amounts from the total cost before calculating the 'cost' score:\n{scholarship_str}"
-    # --- End of new context ---
 
     payload = {
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "tools": [{"google_search": {}}],
-        # We rely on the strong prompt to get JSON back.
     }
 
     try:
@@ -98,7 +89,7 @@ def fetch_ai_scores(universities, is_international, scholarships):
             API_URL + api_key,
             headers={'Content-Type': 'application/json'},
             data=json.dumps(payload),
-            timeout=120 # 2 minute timeout for complex searches
+            timeout=120 
         )
         
         if response.status_code != 200:
@@ -107,7 +98,6 @@ def fetch_ai_scores(universities, is_international, scholarships):
         
         result = response.json()
         
-        # --- Parsing Fix: Find the JSON in the plain text response ---
         content = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '{}')
         
         start_index = content.find('[')
@@ -116,7 +106,7 @@ def fetch_ai_scores(universities, is_international, scholarships):
         if start_index != -1 and end_index != -1:
             json_string = content[start_index:end_index+1]
             try:
-                return json.loads(json_string) # The API now returns a list (array)
+                return json.loads(json_string) 
             except json.JSONDecodeError as e:
                 st.error(f"Error decoding the AI's JSON response: {e}")
                 st.error(f"AI returned: {content}")
@@ -124,7 +114,6 @@ def fetch_ai_scores(universities, is_international, scholarships):
         else:
             st.error(f"AI did not return valid JSON. AI returned: {content}")
             return None
-        # --- End of Parsing Fix ---
 
     except requests.exceptions.RequestException as e:
         st.error(f"Network error while calling API: {e}")
@@ -132,6 +121,72 @@ def fetch_ai_scores(universities, is_international, scholarships):
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")
         return None
+
+# --- NEW: Helper Function: API Call (for Chat) ---
+
+def fetch_chat_response(chat_history, results_context):
+    """
+    Calls the Gemini API to get a chat response based on the results.
+    """
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except KeyError:
+        st.error("API key not found. Please add it to your Streamlit Secrets.")
+        return "Sorry, I can't connect to my brain right now. Please check the API key."
+
+    system_prompt = (
+        "You are a helpful college admissions analyst. "
+        "Your job is to answer follow-up questions about a set of college decision results that I will provide. "
+        "Be concise, friendly, and helpful. Use the data I provide to justify your answers."
+    )
+    
+    # Format the chat history for the API
+    # The API expects a 'contents' list
+    api_history = []
+    
+    # 1. Add the results context as the *first* "user" message
+    context_prompt = (
+        f"Here are the college decision results we are discussing. "
+        f"Use this data to answer my questions. Do not show this table to me again, just use it as context. "
+        f"The data is a JSON array: {results_context}"
+    )
+    api_history.append({"role": "user", "parts": [{"text": context_prompt}]})
+    
+    # 2. Add a priming "model" response
+    api_history.append({"role": "model", "parts": [{"text": "Understood. I have the results table. What's your question about it?"}]})
+    
+    # 3. Add the rest of the actual chat history
+    for msg in chat_history:
+        api_history.append({
+            "role": "user" if msg["role"] == "user" else "model",
+            "parts": [{"text": msg["content"]}]
+        })
+
+    payload = {
+        "contents": api_history,
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        # No 'tools' needed here, we're just talking about the results
+    }
+
+    try:
+        response = requests.post(
+            API_URL + api_key,
+            headers={'Content-Type': 'application/json'},
+            data=json.dumps(payload),
+            timeout=60
+        )
+        
+        if response.status_code != 200:
+            return f"Error from API: {response.status_code} - {response.text}"
+        
+        result = response.json()
+        
+        # Get the AI's text response
+        content = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', 'Sorry, I had trouble thinking of a response.')
+        return content
+
+    except Exception as e:
+        return f"An unexpected error occurred: {e}"
 
 # --- Main App ---
 
@@ -151,6 +206,8 @@ if 'is_international' not in st.session_state:
     st.session_state.is_international = False
 if 'scholarships' not in st.session_state:
     st.session_state.scholarships = {}
+if 'messages' not in st.session_state: # NEW: Initialize chat history
+    st.session_state.messages = []
 
 # --- Sidebar (Controls) ---
 st.sidebar.title("🎓 College Matrix Controls")
@@ -175,7 +232,6 @@ with st.sidebar.expander("1. Enter Universities", expanded=True):
     
     valid_universities = [u.strip() for u in st.session_state.universities if u.strip()]
     
-    # --- NEW: Student Status Checkbox ---
     st.session_state.is_international = st.checkbox(
         "I am an international / out-of-state student",
         value=st.session_state.is_international
@@ -194,12 +250,11 @@ with st.sidebar.expander("2. Set Factor Weights", expanded=True):
     else:
         st.warning(f"Total Weight: {total_weight}% (Will be normalized)")
 
-# --- NEW: 3. Scholarships ---
+# 3. Scholarships
 with st.sidebar.expander("3. Enter Scholarships ($)", expanded=True):
     if not valid_universities:
         st.info("Add universities above to enter scholarships.")
     else:
-        # Initialize scholarships dictionary if needed
         for uni in valid_universities:
             if uni not in st.session_state.scholarships:
                 st.session_state.scholarships[uni] = 0
@@ -218,7 +273,6 @@ with st.sidebar.expander("4. Enter Your Personal Scores (1-10)", expanded=True):
     if not valid_universities:
         st.info("Add universities above to enter your scores.")
     else:
-        # Initialize user_scores dictionary if needed
         for uni in valid_universities:
             if uni not in st.session_state.user_scores:
                 st.session_state.user_scores[uni] = {}
@@ -238,7 +292,6 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
         st.session_state.ai_scores = None
         st.session_state.calculations = None
         
-        # --- NEW: Pass the new values to the function ---
         raw_ai_scores_list = fetch_ai_scores(
             valid_universities,
             st.session_state.is_international,
@@ -246,8 +299,6 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
         )
         
         if raw_ai_scores_list:
-            
-            # --- Data Processing ---
             raw_ai_scores_dict = {}
             for item in raw_ai_scores_list:
                 name = item.get('university_name')
@@ -266,7 +317,6 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
                     normalized_ai_scores[uni_name] = {f['id']: 0 for f in AI_SCORED_FACTORS}
             
             st.session_state.ai_scores = normalized_ai_scores
-            # --- End of Data Processing ---
 
             # --- Perform Calculations ---
             scores_data = []
@@ -296,14 +346,13 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
             
             winner = max(scores_data, key=lambda x: x['score'])
             
-            # --- THIS IS THE FIX ---
             st.session_state.calculations = {
                 'scores': scores_data,
-                'table': table_data, # <-- Changed table_.data to table_data
+                'table': table_data, 
                 'winner': winner
             }
-            # --- END OF FIX ---
             
+            st.session_state.messages = [] # NEW: Clear old chat on new results
             st.success("Analysis Complete!")
         else:
             st.error("Failed to get AI scores. Please check the error messages.")
@@ -314,7 +363,7 @@ st.write("Compare universities by weighting what matters to you. Let AI find the
 
 if not st.session_state.calculations:
     st.info("Fill in the details on the left and click 'Generate AI Rankings' to see your results.")
-    st.image("https://placehold.co/1200x600/FAFAFA/CCCCCC?text=Your+Results+Will+Appear+Here", use_column_width=True)
+    st.image("https.placehold.co/1200x600/FAFAFA/CCCCCC?text=Your+Results+Will+Appear+Here", use_column_width=True)
 else:
     calc = st.session_state.calculations
     
@@ -349,11 +398,9 @@ else:
     # 3. Detailed Table
     st.subheader("Detailed Score Breakdown")
     
-    # Convert table data to DataFrame for better display
     df = pd.DataFrame(calc['table'])
     df = df.set_index("University")
     
-    # Highlight AI-scored columns
     def style_ai_columns(col_name):
         is_ai_col = any(col_name == f['name'] for f in AI_SCORED_FACTORS)
         return 'background-color: #EFF6FF' if is_ai_col else None
@@ -364,3 +411,34 @@ else:
                 .format("{:.1f}", subset=[col for col in df.columns if col != "University"])
     )
     st.caption("Blue-tinted columns are scored by AI. White columns are your manual scores.")
+    
+    # --- NEW: Chat Interface ---
+    st.divider()
+    st.subheader("Ask About Your Results")
+    
+    # Display existing chat messages
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+            
+    # Get new chat input from user
+    if prompt := st.chat_input("e.g., Why did Harvard score so low on cost?"):
+        # Add user's message to history
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        
+        # Display user's message
+        with st.chat_message("user"):
+            st.markdown(prompt)
+            
+        # Get AI's response
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                # Pass the chat history and the results table (as JSON) to the AI
+                results_context = json.dumps(calc['table'])
+                response = fetch_chat_response(st.session_state.messages, results_context)
+                
+                # Display AI's response
+                st.markdown(response)
+                
+                # Add AI's response to history
+                st.session_state.messages.append({"role": "assistant", "content": response})
