@@ -1,3 +1,24 @@
+This is a fantastic evolution of the app! Adding these financial details will make the "Total Cost" score much more accurate and personal.
+
+I've implemented your requests by:
+
+Adding an "I am an international / out-of-state student" checkbox to the sidebar.
+
+Adding a new "Enter Scholarships ($)" section in the sidebar where you can input a dollar amount for each university.
+
+Modifying the AI prompt to use this new information. The AI will now be specifically instructed to:
+
+Use international/out-of-state tuition rates if the box is checked.
+
+Deduct your scholarship amount from the total cost before it creates the 1-10 "Total Cost" score.
+
+The rest of the app (the calculations, the chart) works exactly the same, but the "Total Cost" score it uses will be much smarter and more personalized to you.
+
+Here is the complete, updated app.py file. You can replace the old code on your GitHub with this new code.
+
+Updated app.py File (Plain Text)
+(Copy all the text in the box below and paste it into your app.py file on GitHub, replacing all the old code.)
+
 import streamlit as st
 import requests
 import pandas as pd
@@ -37,10 +58,12 @@ st.set_page_config(
 
 # --- Helper Function: API Call ---
 
-def fetch_ai_scores(universities):
+def fetch_ai_scores(universities, is_international, scholarships):
     """
     Calls the Gemini API to get objective scores for universities.
     This function runs securely on the server.
+    
+    NEW: It now accepts is_international and scholarships to refine the cost score.
     """
     try:
         # Get the API key from Streamlit Secrets
@@ -56,6 +79,7 @@ def fetch_ai_scores(universities):
         "for a list of universities based on specific factors. "
         "For 'Total Cost (Lower is Better)', a lower cost MUST result in a higher score (e.g., the cheapest university gets a 10). "
         "For 'Work Authorization (OPT/STEM OPT)', a 3-year STEM OPT-eligible program is a 10, a 1-year OPT is a 5, and no authorization is a 1. "
+        "When scoring 'Total Cost', you MUST first deduct any scholarship amount provided for that university before making your 1-10 score comparison. "
         "You MUST respond ONLY with a valid JSON array of objects. "
         "Do NOT include any other text, markdown formatting, greetings, or explanations. "
         "Your entire response must be ONLY the JSON array."
@@ -72,13 +96,22 @@ def fetch_ai_scores(universities):
         f"The factor ID keys are: {factors_list_str}"
     )
     
-    # --- API Call Fix: Remove the generationConfig schema ---
+    # --- NEW: Add context for student status and scholarships ---
+    if is_international:
+        user_prompt += "\n\nIMPORTANT: For all 'cost' calculations, you MUST use the international or out-of-state tuition and fees."
+    
+    # Create a list of scholarships to add to the prompt
+    scholarship_list = [f"- {uni}: ${amount}" for uni, amount in scholarships.items() if amount > 0]
+    if scholarship_list:
+        scholarship_str = "\n".join(scholarship_list)
+        user_prompt += f"\n\nIMPORTANT: You MUST deduct these scholarship amounts from the total cost before calculating the 'cost' score:\n{scholarship_str}"
+    # --- End of new context ---
+
     payload = {
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "tools": [{"google_search": {}}],
-        # We removed the 'generationConfig' with the schema, which caused the 400 error.
-        # We now rely on the strong prompt to get JSON back.
+        # We rely on the strong prompt to get JSON back.
     }
 
     try:
@@ -98,8 +131,6 @@ def fetch_ai_scores(universities):
         # --- Parsing Fix: Find the JSON in the plain text response ---
         content = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '{}')
         
-        # The AI might return just the JSON, or it might wrap it in text or markdown.
-        # We need to find the start of the list '[' and the end ']'
         start_index = content.find('[')
         end_index = content.rfind(']')
         
@@ -130,7 +161,6 @@ if 'universities' not in st.session_state:
     st.session_state.universities = ["", ""]
 if 'weights' not in st.session_state:
     st.session_state.weights = {f['id']: 100 // len(ALL_FACTORS) for f in ALL_FACTORS}
-    # Adjust last one to sum to 100
     st.session_state.weights[ALL_FACTORS[-1]['id']] += 100 % len(ALL_FACTORS)
 if 'user_scores' not in st.session_state:
     st.session_state.user_scores = {}
@@ -138,6 +168,10 @@ if 'ai_scores' not in st.session_state:
     st.session_state.ai_scores = None
 if 'calculations' not in st.session_state:
     st.session_state.calculations = None
+if 'is_international' not in st.session_state:
+    st.session_state.is_international = False
+if 'scholarships' not in st.session_state:
+    st.session_state.scholarships = {}
 
 # --- Sidebar (Controls) ---
 st.sidebar.title("🎓 College Matrix Controls")
@@ -154,14 +188,19 @@ with st.sidebar.expander("1. Enter Universities", expanded=True):
         )
         if col2.button("X", key=f"remove_uni_{i}", help="Remove university") and len(st.session_state.universities) > 2:
             st.session_state.universities.pop(i)
-            # Rerun to update the UI immediately
             st.rerun()
 
     if st.button("Add University", use_container_width=True) and len(st.session_state.universities) < 5:
         st.session_state.universities.append("")
         st.rerun()
-
-valid_universities = [u.strip() for u in st.session_state.universities if u.strip()]
+    
+    valid_universities = [u.strip() for u in st.session_state.universities if u.strip()]
+    
+    # --- NEW: Student Status Checkbox ---
+    st.session_state.is_international = st.checkbox(
+        "I am an international / out-of-state student",
+        value=st.session_state.is_international
+    )
 
 # 2. Weights
 with st.sidebar.expander("2. Set Factor Weights", expanded=True):
@@ -176,8 +215,27 @@ with st.sidebar.expander("2. Set Factor Weights", expanded=True):
     else:
         st.warning(f"Total Weight: {total_weight}% (Will be normalized)")
 
-# 3. Manual Scores
-with st.sidebar.expander("3. Enter Your Scores (1-10)", expanded=True):
+# --- NEW: 3. Scholarships ---
+with st.sidebar.expander("3. Enter Scholarships ($)", expanded=True):
+    if not valid_universities:
+        st.info("Add universities above to enter scholarships.")
+    else:
+        # Initialize scholarships dictionary if needed
+        for uni in valid_universities:
+            if uni not in st.session_state.scholarships:
+                st.session_state.scholarships[uni] = 0
+        
+        for uni in valid_universities:
+            st.session_state.scholarships[uni] = st.number_input(
+                f"Scholarship for {uni} ($)",
+                min_value=0,
+                value=st.session_state.scholarships.get(uni, 0),
+                step=1000,
+                key=f"scholarship_{uni}"
+            )
+
+# 4. Manual Scores
+with st.sidebar.expander("4. Enter Your Personal Scores (1-10)", expanded=True):
     if not valid_universities:
         st.info("Add universities above to enter your scores.")
     else:
@@ -195,30 +253,31 @@ with st.sidebar.expander("3. Enter Your Scores (1-10)", expanded=True):
                     key=f"score_{uni}_{factor['id']}"
                 )
 
-# 4. Generate Button
+# 5. Generate Button
 if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width=True, disabled=len(valid_universities) < 2):
     with st.spinner("AI is researching and ranking your universities... This may take a moment."):
         st.session_state.ai_scores = None
         st.session_state.calculations = None
         
-        # This will now be a LIST of objects, e.g., [{'university_name': 'Harvard', ...}]
-        raw_ai_scores_list = fetch_ai_scores(valid_universities)
+        # --- NEW: Pass the new values to the function ---
+        raw_ai_scores_list = fetch_ai_scores(
+            valid_universities,
+            st.session_state.is_international,
+            st.session_state.scholarships
+        )
         
         if raw_ai_scores_list:
             
-            # --- Data Processing Fix ---
-            # Convert the list into a dictionary for easier lookup
+            # --- Data Processing ---
             raw_ai_scores_dict = {}
             for item in raw_ai_scores_list:
                 name = item.get('university_name')
                 if name:
                     raw_ai_scores_dict[name] = item
             
-            # Normalize AI scores (match keys from the dict we just made)
             normalized_ai_scores = {}
             for uni_name in valid_universities:
                 lower_uni_name = uni_name.lower()
-                # Find the key in raw_ai_scores_dict that matches
                 found_key = next((key for key in raw_ai_scores_dict if lower_uni_name in key.lower()), None)
                 
                 if found_key:
@@ -228,7 +287,7 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
                     normalized_ai_scores[uni_name] = {f['id']: 0 for f in AI_SCORED_FACTORS}
             
             st.session_state.ai_scores = normalized_ai_scores
-            # --- End of Data Processing Fix ---
+            # --- End of Data Processing ---
 
             # --- Perform Calculations ---
             scores_data = []
@@ -243,7 +302,6 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
                     fid = factor['id']
                     score = 0
                     if fid in [f['id'] for f in AI_SCORED_FACTORS]:
-                        # Get the score from the normalized dictionary
                         score = st.session_state.ai_scores.get(uni, {}).get(fid, 0)
                     else:
                         score = st.session_state.user_scores.get(uni, {}).get(fid, 0)
@@ -284,7 +342,6 @@ else:
     # 2. Comparison Chart
     st.subheader("Final Score Comparison")
     
-    # Create Plotly bar chart
     fig = go.Figure(
         data=[
             go.Bar(
@@ -309,11 +366,9 @@ else:
     # 3. Detailed Table
     st.subheader("Detailed Score Breakdown")
     
-    # Convert table data to DataFrame for better display
     df = pd.DataFrame(calc['table'])
     df = df.set_index("University")
     
-    # Highlight AI-scored columns
     def style_ai_columns(col_name):
         is_ai_col = any(col_name == f['name'] for f in AI_SCORED_FACTORS)
         return 'background-color: #EFF6FF' if is_ai_col else None
