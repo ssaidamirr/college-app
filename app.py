@@ -52,7 +52,7 @@ def parse_dollars(s):
 # --- Page Configuration ---
 st.set_page_config(
     page_title="AI College Decision Matrix",
-    page_icon="🎓",
+    page_icon="",
     layout="wide"
 )
 
@@ -254,7 +254,7 @@ if 'opt_is_important' not in st.session_state:
     st.session_state.opt_is_important = True # Default for international
 
 # --- Sidebar (Controls) ---
-st.sidebar.title("🎓 College Matrix Controls")
+st.sidebar.title("College Matrix Controls")
 
 # 1. Universities
 with st.sidebar.expander("1. Enter Universities & Degree", expanded=True):
@@ -516,16 +516,16 @@ st.sidebar.markdown(
 col1, col2 = st.sidebar.columns([1, 3]) # Give more space for the text
 with col1:
     st.image(
-        "https://i.imgur.com/o2xH2Bv.jpg", # <-- I have put your correct Imgur link here!
+        "https://imgur.com/ohW1Ili", # <-- I have put your correct Imgur link here!
         width=60
     )
 with col2:
     st.markdown("© 2025 | Built by")
-    st.markdown("[Saidamir S. 🔗](https://www.linkedin.com/in/ssaidamirr)")
+    st.markdown("[Saidamir E.](https://www.linkedin.com/in/ssaidamirr)")
 # --- END NEW ---
 
 # --- Main Page (Results) ---
-st.title("🎓 AI-Powered University Decision Matrix")
+st.title("AI-Powered University Decision Matrix")
 st.write("Compare universities by weighting what matters to you. Let AI find the objective data.")
 
 if not st.session_state.calculations:
