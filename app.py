@@ -49,58 +49,36 @@ def fetch_ai_scores(universities):
         st.error("API key not found. Please add it to your Streamlit Secrets.")
         return None
 
+    # --- Prompt Fix: Be very strict ---
     system_prompt = (
         "You are an expert college admissions and data analyst. "
         "Your job is to provide objective scores (from 1 to 10, where 1 is worst and 10 is best) "
         "for a list of universities based on specific factors. "
         "For 'Total Cost (Lower is Better)', a lower cost MUST result in a higher score (e.g., the cheapest university gets a 10). "
         "For 'Work Authorization (OPT/STEM OPT)', a 3-year STEM OPT-eligible program is a 10, a 1-year OPT is a 5, and no authorization is a 1. "
-        "Respond ONLY with the requested JSON."
+        "You MUST respond ONLY with a valid JSON array of objects. "
+        "Do NOT include any other text, markdown formatting, greetings, or explanations. "
+        "Your entire response must be ONLY the JSON array."
     )
     
     uni_list_str = ', '.join([f'"{u}"' for u in universities])
-    factors_list_str = '\n- '.join([f['name'] for f in AI_SCORED_FACTORS])
+    factors_list_str = '\n- '.join([f['id'] for f in AI_SCORED_FACTORS]) # Use IDs for keys
     
     user_prompt = (
         f"For the following list of universities: [{uni_list_str}], "
-        f"provide scores (1-10) for these factors:\n- {factors_list_str}\n\n"
-        "Return your response as a JSON array, with one object per university, matching the provided schema."
+        "provide scores (1-10) for these factors. "
+        "Return your response ONLY as a JSON array, with one object per university. "
+        "Each object MUST have a 'university_name' key and keys for each factor ID. "
+        f"The factor ID keys are: {factors_list_str}"
     )
-
-    # --- Schema Fix ---
-    # Dynamically build the schema properties for AI factors
-    ai_factor_properties = {
-        factor['id']: {"type": "NUMBER", "description": f"1-10 score for {factor['name']}"}
-        for factor in AI_SCORED_FACTORS
-    }
     
-    # Add the university name property
-    all_properties = {
-        "university_name": {"type": "STRING", "description": "The full name of the university"},
-        **ai_factor_properties  # Merge the AI factor properties
-    }
-    
-    # Define the new, correct schema as an ARRAY of OBJECTS
-    schema = {
-        "type": "ARRAY",
-        "description": "An array of university score objects.",
-        "items": {
-            "type": "OBJECT",
-            "properties": all_properties,
-            "required": ["university_name"] + list(ai_factor_properties.keys())
-        }
-    }
-    # --- End of Schema Fix ---
-
+    # --- API Call Fix: Remove the generationConfig schema ---
     payload = {
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "tools": [{"google_search": {}}],
-        "generationConfig": {
-            "responseMimeType": "application/json",
-            "responseSchema": schema,
-            "temperature": 0.0,
-        },
+        # We removed the 'generationConfig' with the schema, which caused the 400 error.
+        # We now rely on the strong prompt to get JSON back.
     }
 
     try:
@@ -117,18 +95,29 @@ def fetch_ai_scores(universities):
         
         result = response.json()
         
-        # Extract and return the JSON content
-        candidate = result.get('candidates', [{}])[0]
-        content = candidate.get('content', {}).get('parts', [{}])[0].get('text', '{}')
+        # --- Parsing Fix: Find the JSON in the plain text response ---
+        content = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '{}')
         
-        # The API now returns a list (array)
-        return json.loads(content)
+        # The AI might return just the JSON, or it might wrap it in text or markdown.
+        # We need to find the start of the list '[' and the end ']'
+        start_index = content.find('[')
+        end_index = content.rfind(']')
+        
+        if start_index != -1 and end_index != -1:
+            json_string = content[start_index:end_index+1]
+            try:
+                return json.loads(json_string) # The API now returns a list (array)
+            except json.JSONDecodeError as e:
+                st.error(f"Error decoding the AI's JSON response: {e}")
+                st.error(f"AI returned: {content}")
+                return None
+        else:
+            st.error(f"AI did not return valid JSON. AI returned: {content}")
+            return None
+        # --- End of Parsing Fix ---
 
     except requests.exceptions.RequestException as e:
         st.error(f"Network error while calling API: {e}")
-        return None
-    except json.JSONDecodeError as e:
-        st.error(f"Error decoding API response: {e}")
         return None
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")
