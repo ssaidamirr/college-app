@@ -8,10 +8,10 @@ import json
 
 # Factors the AI will score (1-10, 1=worst, 10=best)
 AI_SCORED_FACTORS = [
-    {'id': 'cost', 'name': 'Total Cost (Lower is Better)'},
-    {'id': 'opt', 'name': 'Work Authorization (OPT/STEM OPT)'},
-    {'id': 'careers', 'name': 'Career Opportunities'},
-    {'id': 'prestige', 'name': 'Academic Prestige'},
+    {'id': 'cost', 'name': 'Total Cost of Attendance (Lower is Better)'},
+    {'id': 'opt', 'name': 'Work Authorization (based on Major)'},
+    {'id': 'careers', 'name': 'Career Opportunities (based on Major)'},
+    {'id': 'prestige', 'name': 'Academic Prestige (for Major)'},
     {'id': 'stress', 'name': 'Stress/Workload'},
     {'id': 'living', 'name': 'Living Environment/Life'},
 ]
@@ -37,11 +37,11 @@ st.set_page_config(
 
 # --- Helper Function: API Call (for Rankings) ---
 
-def fetch_ai_scores(universities, is_international, scholarships):
+def fetch_ai_scores(universities_with_majors, is_international, scholarships, degree_level):
     """
     Calls the Gemini API to get objective scores for universities.
     
-    NEW: Now requests an object with 'score' and 'note' for each factor.
+    NEW: Now accepts degree_level and a list of university/major objects.
     """
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
@@ -49,38 +49,54 @@ def fetch_ai_scores(universities, is_international, scholarships):
         st.error("API key not found. Please add it to your Streamlit Secrets.")
         return None
 
+    # --- PROMPT UPGRADE ---
     system_prompt = (
-        "You are an expert college admissions and data analyst. "
+        "You are an expert college admissions and career analyst. "
         "Your job is to provide objective scores (from 1 to 10, where 1 is worst and 10 is best) "
-        "for a list of universities based on specific factors. "
-        "For 'Total Cost (Lower is Better)', a lower cost MUST result in a higher score (e.g., the cheapest university gets a 10). "
-        "For 'Work Authorization (OPT/STEM OPT)', a 3-year STEM OPT-eligible program is a 10, a 1-year OPT is a 5, and no authorization is a 1. "
-        "When scoring 'Total Cost', you MUST first deduct any scholarship amount provided for that university before making your 1-10 score comparison. "
+        "for a list of university/major pairs. "
         "You MUST respond ONLY with a valid JSON array of objects. "
         "Do NOT include any other text, markdown formatting, greetings, or explanations. "
         "Your entire response must be ONLY the JSON array."
-    )
-    
-    uni_list_str = ', '.join([f'"{u}"' for u in universities])
-    factors_list_str = '\n- '.join([f['id'] for f in AI_SCORED_FACTORS]) # Use IDs for keys
-    
-    # --- PROMPT UPGRADE ---
-    user_prompt = (
-        f"For the following list of universities: [{uni_list_str}], "
-        "provide scores for these factors. "
-        "Return your response ONLY as a JSON array, with one object per university. "
-        "Each object MUST have a 'university_name' key. "
-        "For each factor ID, the value MUST be an object with two keys: 'score' (the 1-10 rating) and 'note' (a brief string with the raw data used, e.g., '$45,000 net cost' or '3-year STEM OPT'). "
-        f"The factor ID keys are: {factors_list_str}"
+        "\n\nSCORING RULES:"
+        "1. 'cost' (Total Cost of Attendance): Find the total cost (tuition, fees, room, board). A lower cost MUST get a higher score. "
+        "   You MUST first deduct any provided scholarship amount before scoring. "
+        "   If the user is international/out-of-state, you MUST use that specific tuition rate."
+        "2. 'opt' (Work Authorization): Based on the *specific major* and *degree level*, determine its U.S. work authorization. "
+        "   A major eligible for the 3-year STEM OPT extension gets a 10. "
+        "   A major eligible for only the 1-year standard OPT gets a 5. "
+        "   If no OPT is available, score it 1. Note the eligibility in your response."
+        "3. 'careers' & 'prestige': These scores should be specific to the *major* at that university, not the university as a whole."
+        "4. 'note': For each factor, you MUST provide a 'note' with the raw data you used (e.g., '$60k/yr total cost', '3-year STEM OPT eligible', etc.)."
     )
     # --- END PROMPT UPGRADE ---
     
-    if is_international:
-        user_prompt += "\n\nIMPORTANT: For all 'cost' calculations, you MUST use the international or out-of-state tuition and fees."
+    # Create the list of universities and majors for the prompt
+    uni_major_list_str = json.dumps(universities_with_majors)
+    factors_list_str = '\n- '.join([f['id'] for f in AI_SCORED_FACTORS])
     
-    scholarship_list = [f"- {uni}: ${amount}" for uni, amount in scholarships.items() if amount > 0]
-    if scholarship_list:
-        scholarship_str = "\n".join(scholarship_list)
+    user_prompt = (
+        f"I am looking at {degree_level} degrees. "
+        f"For the following list of university/major pairs: {uni_major_list_str}, "
+        "provide scores for these factors. "
+        "Return your response ONLY as a JSON array, with one object per university. "
+        "Each object MUST have a 'university_name' key. "
+        "For each factor ID, the value MUST be an object with two keys: 'score' (the 1-10 rating) and 'note' (a brief string with the raw data used). "
+        f"The factor ID keys are: {factors_list_str}"
+    )
+    
+    if is_international:
+        user_prompt += "\n\nIMPORTANT: I am an international / out-of-state student. You MUST use the international/out-of-state total cost of attendance for the 'cost' score."
+    
+    # Rebuild scholarship list to match university names
+    scholarship_prompt_list = []
+    for i, uni in enumerate(universities_with_majors):
+        scholarship_key = f"{uni['name']}_{i}"
+        amount = scholarships.get(scholarship_key, 0)
+        if amount > 0:
+            scholarship_prompt_list.append(f"- {uni['name']} ({uni['major']}): ${amount}")
+            
+    if scholarship_prompt_list:
+        scholarship_str = "\n".join(scholarship_prompt_list)
         user_prompt += f"\n\nIMPORTANT: You MUST deduct these scholarship amounts from the total cost before calculating the 'cost' score:\n{scholarship_str}"
 
     payload = {
@@ -94,7 +110,7 @@ def fetch_ai_scores(universities, is_international, scholarships):
             API_URL + api_key,
             headers={'Content-Type': 'application/json'},
             data=json.dumps(payload),
-            timeout=120 
+            timeout=180 # Increased timeout for more complex queries
         )
         
         if response.status_code != 200:
@@ -139,13 +155,16 @@ def fetch_chat_response(chat_history, results_context):
         st.error("API key not found. Please add it to your Streamlit Secrets.")
         return "Sorry, I can't connect to my brain right now. Please check the API key."
 
+    # --- PROMPT UPGRADE ---
     system_prompt = (
-        "You are a helpful college admissions analyst. "
+        "You are a helpful college admissions and career analyst. "
         "Your job is to answer follow-up questions about a set of college decision results that I will provide. "
         "Be concise, friendly, and helpful. Use the data I provide to justify your answers. "
-        "The user's results table contains scores (e.g., '5/10') and notes (e.g., '$35k net cost') in the same cell. "
-        "When asked 'how much was X', use the 'note' to find the dollar amount."
+        "The user's results table contains scores (e.g., '5/10') and notes (e.g., '$35k net cost' or '3-year STEM OPT') in the same cell. "
+        "When asked 'how much was X', use the 'note' to find the dollar amount. "
+        "When asked about STEM OPT, use the 'note' from the 'Work Authorization' column."
     )
+    # --- END PROMPT UPGRADE ---
     
     api_history = []
     
@@ -190,8 +209,6 @@ def fetch_chat_response(chat_history, results_context):
 # --- Main App ---
 
 # Initialize session state
-if 'universities' not in st.session_state:
-    st.session_state.universities = ["", ""]
 if 'weights' not in st.session_state:
     st.session_state.weights = {f['id']: 100 // len(ALL_FACTORS) for f in ALL_FACTORS}
     st.session_state.weights[ALL_FACTORS[-1]['id']] += 100 % len(ALL_FACTORS)
@@ -207,32 +224,66 @@ if 'scholarships' not in st.session_state:
     st.session_state.scholarships = {}
 if 'messages' not in st.session_state:
     st.session_state.messages = []
+# --- NEW: Degree Level and University/Major inputs ---
+if 'degree_level' not in st.session_state:
+    st.session_state.degree_level = "Bachelor's"
 if 'university_inputs' not in st.session_state:
-    st.session_state.university_inputs = ["", ""]
+    # Store a list of dicts
+    st.session_state.university_inputs = [{'name': '', 'major': ''}, {'name': '', 'major': ''}]
+# --- END NEW ---
 
 # --- Sidebar (Controls) ---
 st.sidebar.title("🎓 College Matrix Controls")
 
 # 1. Universities
-with st.sidebar.expander("1. Enter Universities", expanded=True):
+with st.sidebar.expander("1. Enter Universities & Degree", expanded=True):
+    
+    # --- NEW: Degree Level Radio ---
+    st.session_state.degree_level = st.radio(
+        "Select Degree Level",
+        ("Bachelor's", "Master's"),
+        index=0 if st.session_state.degree_level == "Bachelor's" else 1,
+        horizontal=True
+    )
+    # --- END NEW ---
+    
+    st.divider()
+    
+    # --- UI UPGRADE: University and Major ---
     for i in range(len(st.session_state.university_inputs)):
-        col1, col2 = st.columns([4, 1])
-        st.session_state.university_inputs[i] = col1.text_input(
-            f"University {i + 1}", 
-            st.session_state.university_inputs[i], 
+        st.markdown(f"**University {i + 1}**")
+        col1, col2 = st.columns([3, 2])
+        st.session_state.university_inputs[i]['name'] = col1.text_input(
+            "University Name", 
+            st.session_state.university_inputs[i]['name'], 
             label_visibility="collapsed",
-            placeholder=f"University {i + 1}",
-            key=f"uni_input_{i}"
+            placeholder="University Name",
+            key=f"uni_name_{i}"
         )
-        if col2.button("X", key=f"remove_uni_{i}", help="Remove university") and len(st.session_state.university_inputs) > 2:
+        st.session_state.university_inputs[i]['major'] = col2.text_input(
+            "Major", 
+            st.session_state.university_inputs[i]['major'], 
+            label_visibility="collapsed",
+            placeholder="Major (e.g., Computer Science)",
+            key=f"uni_major_{i}"
+        )
+        
+        if st.button(f"Remove Entry {i + 1}", key=f"remove_uni_{i}", help="Remove university") and len(st.session_state.university_inputs) > 2:
             st.session_state.university_inputs.pop(i)
             st.rerun()
+        
+        st.divider()
 
     if st.button("Add University", use_container_width=True) and len(st.session_state.university_inputs) < 5:
-        st.session_state.university_inputs.append("")
+        st.session_state.university_inputs.append({'name': '', 'major': ''})
         st.rerun()
     
-    valid_universities = [u.strip() for u in st.session_state.university_inputs if u.strip()]
+    # --- LOGIC UPGRADE: Validate both name and major are filled ---
+    valid_universities = [
+        u for u in st.session_state.university_inputs 
+        if u['name'].strip() and u['major'].strip()
+    ]
+    # --- END LOGIC UPGRADE ---
     
     st.session_state.is_international = st.checkbox(
         "I am an international / out-of-state student",
@@ -255,12 +306,12 @@ with st.sidebar.expander("2. Set Factor Weights", expanded=True):
 # 3. Scholarships
 with st.sidebar.expander("3. Enter Scholarships ($)", expanded=True):
     if not valid_universities:
-        st.info("Add universities above to enter scholarships.")
+        st.info("Add universities & majors above to enter scholarships.")
     else:
         st.session_state.scholarships = {}
-        for i, uni_name in enumerate(valid_universities):
-            st.session_state.scholarships[f"{uni_name}_{i}"] = st.number_input(
-                f"Scholarship for {uni_name} ($)",
+        for i, uni in enumerate(valid_universities):
+            st.session_state.scholarships[f"{uni['name']}_{i}"] = st.number_input(
+                f"Scholarship for {uni['name']} ($)",
                 min_value=0,
                 step=1000,
                 key=f"scholarship_{i}"
@@ -269,14 +320,14 @@ with st.sidebar.expander("3. Enter Scholarships ($)", expanded=True):
 # 4. Manual Scores
 with st.sidebar.expander("4. Enter Your Personal Scores (1-10)", expanded=True):
     if not valid_universities:
-        st.info("Add universities above to enter your scores.")
+        st.info("Add universities & majors above to enter your scores.")
     else:
         st.session_state.user_scores = {}
-        for i, uni_name in enumerate(valid_universities):
-            st.markdown(f"**{uni_name}** (Entry {i+1})")
-            st.session_state.user_scores[f"{uni_name}_{i}"] = {}
+        for i, uni in enumerate(valid_universities):
+            st.markdown(f"**{uni['name']}** ({uni['major']})")
+            st.session_state.user_scores[f"{uni['name']}_{i}"] = {}
             for factor in USER_SCORED_FACTORS:
-                st.session_state.user_scores[f"{uni_name}_{i}"][factor['id']] = st.number_input(
+                st.session_state.user_scores[f"{uni['name']}_{i}"][factor['id']] = st.number_input(
                     factor['name'], 1, 10, 5, 
                     key=f"score_{i}_{factor['id']}"
                 )
@@ -290,7 +341,8 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
         raw_ai_scores_list = fetch_ai_scores(
             valid_universities,
             st.session_state.is_international,
-            st.session_state.scholarships
+            st.session_state.scholarships,
+            st.session_state.degree_level
         )
         
         if raw_ai_scores_list:
@@ -301,7 +353,8 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
                     raw_ai_scores_dict[name] = item
             
             normalized_ai_scores = {}
-            for i, uni_name in enumerate(valid_universities):
+            for i, uni in enumerate(valid_universities):
+                uni_name = uni['name']
                 lower_uni_name = uni_name.lower()
                 found_key = next((key for key in raw_ai_scores_dict if lower_uni_name in key.lower()), None)
                 
@@ -311,12 +364,9 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
                     normalized_ai_scores[score_key] = raw_ai_scores_dict[found_key]
                 else:
                     st.warning(f"AI did not return data for '{uni_name}'. Scores will be 0.")
-                    # --- DATA STRUCTURE FIX ---
-                    # Create an empty structure that matches the new format
                     normalized_ai_scores[score_key] = {
                         f['id']: {"score": 0, "note": "Data not found"} for f in AI_SCORED_FACTORS
                     }
-                    # --- END DATA STRUCTURE FIX ---
             
             st.session_state.ai_scores = normalized_ai_scores
 
@@ -325,36 +375,37 @@ if st.sidebar.button("Generate AI Rankings", type="primary", use_container_width
             table_data = []
             total_w = sum(st.session_state.weights.values()) or 1
             
-            for i, uni_name in enumerate(valid_universities):
+            for i, uni in enumerate(valid_universities):
+                uni_name = uni['name']
+                uni_major = uni['major']
                 score_key = f"{uni_name}_{i}"
                 weighted_score = 0
-                row = {"University": f"{uni_name} (Entry {i+1})"}
+                
+                # --- TABLE DATA UPGRADE ---
+                table_row_name = f"{uni_name} ({uni_major})"
+                row = {"University": table_row_name}
                 
                 for factor in ALL_FACTORS:
                     fid = factor['id']
                     
                     if fid in [f['id'] for f in AI_SCORED_FACTORS]:
-                        # --- CALCULATION LOGIC UPGRADE ---
-                        # Get the nested score object
                         ai_score_obj = st.session_state.ai_scores.get(score_key, {}).get(fid, {"score": 0, "note": "N/A"})
                         score = ai_score_obj.get('score', 0)
                         note = ai_score_obj.get('note', 'N/A')
                         
-                        # Add to the table row with the note
                         row[factor['name']] = f"{score}/10 ({note})"
-                        # --- END CALCULATION LOGIC UPGRADE ---
                     else:
                         score = st.session_state.user_scores.get(score_key, {}).get(fid, 0)
-                        # Add to the table row (no note for user scores)
                         row[factor['name']] = f"{score}/10"
                     
                     weight = st.session_state.weights[fid] / total_w
-                    weighted_score += score * weight # Weight is based on the 1-10 score
+                    weighted_score += score
                 
-                final_score = round(weighted_score * 10, 1) # Scale to 1-100
-                scores_data.append({'name': f"{uni_name} (Entry {i+1})", 'score': final_score})
+                final_score = round(weighted_score * 10, 1)
+                scores_data.append({'name': table_row_name, 'score': final_score})
                 row['Final Score'] = final_score
                 table_data.append(row)
+            # --- END TABLE DATA UPGRADE ---
             
             winner = max(scores_data, key=lambda x: x['score'])
             
@@ -420,7 +471,6 @@ else:
     st.dataframe(
         df.style.map_index(style_ai_columns, axis=1)
                 .apply(lambda x: ['background-color: #DBEAFE' if x.name == 'Final Score' else '' for i in x], axis=0)
-                # Removed the .format() as columns are now strings
     )
     st.caption("Blue-tinted columns are scored by AI. White columns are your manual scores.")
     
@@ -428,12 +478,10 @@ else:
     st.divider()
     st.subheader("Ask About Your Results")
     
-    # Display existing chat messages
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
             
-    # Get new chat input from user
     if prompt := st.chat_input("e.g., Why did Harvard score so low on cost?"):
         st.session_state.messages.append({"role": "user", "content": prompt})
         
